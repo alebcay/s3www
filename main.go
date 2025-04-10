@@ -272,7 +272,7 @@ func main() {
 
 	mux := http.FileServer(&S3{client, bucket, bucketPath})
 
-	// Wrap the existing mux with the CORS middleware.
+	// Wrap the existing mux with the CORS middleware.d
 	opts := cors.Options{
 		AllowOriginFunc: func(origin string) bool {
 			if allowedCorsOrigin == "" {
@@ -287,12 +287,7 @@ func main() {
 		},
 		AllowedMethods: []string{
 			http.MethodGet,
-			http.MethodPut,
 			http.MethodHead,
-			http.MethodPost,
-			http.MethodDelete,
-			http.MethodOptions,
-			http.MethodPatch,
 		},
 		AllowedHeaders:   []string{"*"},
 		ExposedHeaders:   []string{"*"},
