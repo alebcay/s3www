@@ -12,21 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM golang:1.21
+FROM golang:1.24
 
-RUN \
-    mkdir -p /licenses && \
-    curl -s -q https://raw.githubusercontent.com/harshavardhana/s3www/master/CREDITS -o /licenses/CREDITS && \
-    curl -s -q https://raw.githubusercontent.com/harshavardhana/s3www/master/LICENSE -o /licenses/LICENSE
+ENV GO111MODULE=on
+ENV GOOS=linux
+ENV CGO_ENABLED=0
+
+WORKDIR /build
+
+COPY go.mod .
+COPY go.sum .
+RUN go mod download
+COPY . .
+RUN go build -trimpath -ldflags '-s -w' .
 
 FROM scratch
 
-EXPOSE 8080
-
 # Copy CA certificates to prevent x509: certificate signed by unknown authority errors
 COPY --from=0 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=0 /licenses /licenses
 
-COPY s3www /s3www
+COPY --from=0 /build/s3www /s3www
 
 ENTRYPOINT ["/s3www"]

@@ -56,7 +56,7 @@ func pathIsDir(ctx context.Context, s3 *S3, name string) bool {
 	name = strings.Trim(name, pathSeparator) + pathSeparator
 	listCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	objCh := s3.Client.ListObjects(listCtx,
+	objCh := s3.ListObjects(listCtx,
 		s3.bucket,
 		minio.ListObjectsOptions{
 			Prefix:  name,
@@ -104,7 +104,7 @@ func getObject(ctx context.Context, s3 *S3, name string) (*minio.Object, error) 
 	}
 	names = append(names, "/404.html")
 	for _, n := range names {
-		obj, err := s3.Client.GetObject(ctx, s3.bucket, n, minio.GetObjectOptions{})
+		obj, err := s3.GetObject(ctx, s3.bucket, n, minio.GetObjectOptions{})
 		if err != nil {
 			log.Println(err)
 			continue
@@ -272,7 +272,7 @@ func main() {
 
 	mux := http.FileServer(&S3{client, bucket, bucketPath})
 
-	// Wrap the existing mux with the CORS middleware.
+	// Wrap the existing mux with the CORS middleware.d
 	opts := cors.Options{
 		AllowOriginFunc: func(origin string) bool {
 			if allowedCorsOrigin == "" {
@@ -287,12 +287,7 @@ func main() {
 		},
 		AllowedMethods: []string{
 			http.MethodGet,
-			http.MethodPut,
 			http.MethodHead,
-			http.MethodPost,
-			http.MethodDelete,
-			http.MethodOptions,
-			http.MethodPatch,
 		},
 		AllowedHeaders:   []string{"*"},
 		ExposedHeaders:   []string{"*"},
