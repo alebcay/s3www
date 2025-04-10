@@ -139,6 +139,7 @@ var (
 	spaFile           string
 	allowedCorsOrigin string
 	letsEncrypt       bool
+	urlBasePath       string
 	versionF          = flag.Bool("version", false, "print version")
 )
 
@@ -157,6 +158,7 @@ func init() {
 	flag.StringVar(&secretKeyFile, "secretKeyFile", defaultEnvString("S3WWW_SECRET_KEY_FILE", ""), "file which contains the secret key (S3WWW_SECRET_KEY_FILE)")
 	flag.StringVar(&spaFile, "spaFile", defaultEnvString("S3WWW_SPA_FILE", ""), "if working with SPA (Single Page Application), use this key the set the absolute path of the file to call whenever a file dosen't exist (S3WWW_SPA_FILE)")
 	flag.StringVar(&allowedCorsOrigin, "allowed-cors-origins", defaultEnvString("S3WWW_ALLOWED_CORS_ORIGINS", ""), "a list of origins a cross-domain request can be executed from (S3WWW_ALLOWED_CORS_ORIGINS)")
+	flag.StringVar(&urlBasePath, "url-base-path", defaultEnvString("S3WWW_URL_BASE_PATH", "/"), "base path to serve files from (S3WWW_URL_BASE_PATH)")
 }
 
 func defaultEnvString(key string, defaultVal string) string {
@@ -270,9 +272,9 @@ func main() {
 		log.Fatalln(err)
 	}
 
-	mux := http.FileServer(&S3{client, bucket, bucketPath})
+	mux := http.StripPrefix(urlBasePath, http.FileServer(&S3{client, bucket, bucketPath}))
 
-	// Wrap the existing mux with the CORS middleware.d
+	// Wrap the existing mux with the CORS middleware.
 	opts := cors.Options{
 		AllowOriginFunc: func(origin string) bool {
 			if allowedCorsOrigin == "" {
@@ -294,16 +296,18 @@ func main() {
 		AllowCredentials: true,
 	}
 	muxHandler := cors.New(opts).Handler(mux)
+	m := http.NewServeMux()
+	m.Handle(urlBasePath, muxHandler)
 
 	switch {
 	case letsEncrypt:
 		log.Printf("Started listening on https://%s\n", address)
-		certmagic.HTTPS([]string{address}, muxHandler)
+		certmagic.HTTPS([]string{address}, m)
 	case tlsCert != "" && tlsKey != "":
 		log.Printf("Started listening on https://%s\n", address)
-		log.Fatalln(http.ListenAndServeTLS(address, tlsCert, tlsKey, muxHandler))
+		log.Fatalln(http.ListenAndServeTLS(address, tlsCert, tlsKey, m))
 	default:
 		log.Printf("Started listening on http://%s\n", address)
-		log.Fatalln(http.ListenAndServe(address, muxHandler))
+		log.Fatalln(http.ListenAndServe(address, m))
 	}
 }
