@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -71,26 +72,27 @@ func (h *httpMinioObject) Readdir(count int) ([]os.FileInfo, error) {
 	}
 
 	// List non-recursively first count entries for prefix 'prefix" prefix.
-	objsInfo, err := listObjectsN(h.bucket, h.prefix, count)
+	objsInfo, err := listObjectsN(h.bucket, h.prefix+pathSeparator, count)
 	if err != nil {
 		return nil, os.ErrNotExist
 	}
 	var fileInfos []os.FileInfo
 	for _, objInfo := range objsInfo {
+		objInfo.Key = filepath.Base(objInfo.Key)
 		if strings.HasSuffix(objInfo.Key, pathSeparator) {
 			fileInfos = append(fileInfos, objectInfo{
 				ObjectInfo: minio.ObjectInfo{
-					Key:          strings.TrimSuffix(objInfo.Key, pathSeparator),
+					Key:          objInfo.Key,
 					LastModified: objInfo.LastModified,
 				},
 				prefix: strings.TrimSuffix(objInfo.Key, pathSeparator),
 				isDir:  true,
 			})
-			continue
+		} else {
+			fileInfos = append(fileInfos, objectInfo{
+				ObjectInfo: objInfo,
+			})
 		}
-		fileInfos = append(fileInfos, objectInfo{
-			ObjectInfo: objInfo,
-		})
 	}
 	return fileInfos, nil
 }

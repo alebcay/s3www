@@ -31,7 +31,7 @@ type objectInfo struct {
 }
 
 func (o objectInfo) Name() string {
-	return o.ObjectInfo.Key
+	return o.Key
 }
 
 func (o objectInfo) Size() int64 {
@@ -46,7 +46,7 @@ func (o objectInfo) Mode() os.FileMode {
 }
 
 func (o objectInfo) ModTime() time.Time {
-	return o.ObjectInfo.LastModified
+	return o.LastModified
 }
 
 func (o objectInfo) IsDir() bool {
