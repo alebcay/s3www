@@ -40,6 +40,58 @@ import (
 // to set the binary version.
 var version = "0.0.0-dev"
 
+// joinRedirectPath joins two URL path segments avoiding duplication
+// when the extra path already starts with the base path.
+func joinRedirectPath(base, extra string) string {
+	base = "/" + strings.Trim(base, "/")
+	extra = "/" + strings.Trim(extra, "/")
+	if strings.HasPrefix(extra, base) {
+		return base + extra[len(base):]
+	}
+	return base + extra
+}
+
+// redirectHandler redirects file requests to another host while serving directories normally.
+type redirectHandler struct {
+	http.Handler
+	redirectHost string
+	redirectPath string
+	urlBasePath  string
+	s3fs         *S3
+}
+
+func (rh *redirectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	ctx := context.Background()
+	requestPath := normalizePath(r.URL.Path)
+
+	if requestPath == "/" || strings.HasSuffix(requestPath, "/") {
+		if requestIsDir(ctx, rh.s3fs, requestPath) {
+			rh.Handler.ServeHTTP(w, r)
+			return
+		}
+		redirectURL := rh.redirectHost + joinRedirectPath(rh.redirectPath, requestPath)
+		http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
+		return
+	}
+
+	if requestIsDir(ctx, rh.s3fs, requestPath+"/") {
+		localPath := path.Join(rh.urlBasePath, requestPath) + "/"
+		http.Redirect(w, r, localPath, http.StatusTemporaryRedirect)
+		return
+	}
+
+	name := strings.TrimPrefix(rh.s3fs.resolveName(requestPath), pathSeparator)
+	_, err := rh.s3fs.StatObject(ctx, rh.s3fs.bucket, name, minio.StatObjectOptions{})
+
+	if err == nil {
+		redirectURL := rh.redirectHost + joinRedirectPath(rh.redirectPath, requestPath)
+		http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
+		return
+	}
+
+	http.NotFound(w, r)
+}
+
 // S3 - A S3 implements FileSystem using the minio client
 // allowing access to your S3 buckets and objects.
 //
@@ -52,7 +104,19 @@ type S3 struct {
 	bucketPath string
 }
 
+func normalizePath(p string) string {
+	if p == "" {
+		return "/"
+	}
+	return p
+}
+
 func pathIsDir(ctx context.Context, s3 *S3, name string) bool {
+	name = normalizePath(name)
+	if name == "/" {
+		return true
+	}
+	name = path.Join(s3.bucketPath, name)
 	name = strings.Trim(name, pathSeparator) + pathSeparator
 	listCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -69,10 +133,36 @@ func pathIsDir(ctx context.Context, s3 *S3, name string) bool {
 	return false
 }
 
+func requestIsDir(ctx context.Context, s3 *S3, requestPath string) bool {
+	requestPath = normalizePath(requestPath)
+	if requestPath == "/" {
+		return true
+	}
+	if strings.HasSuffix(requestPath, "/") {
+		return pathIsDir(ctx, s3, requestPath)
+	}
+	return pathIsDir(ctx, s3, requestPath+"/")
+}
+
+// resolveName prepends bucketPath to name, avoiding duplication
+// when name already contains the bucketPath prefix.
+func (s3 *S3) resolveName(name string) string {
+	if s3.bucketPath != "/" {
+		bp := "/" + strings.Trim(s3.bucketPath, "/")
+		if name == bp || strings.HasPrefix(name, bp+"/") {
+			name = strings.TrimPrefix(name, bp)
+		}
+	}
+	return path.Join(s3.bucketPath, name)
+}
+
 // Open - implements http.Filesystem implementation.
 func (s3 *S3) Open(name string) (http.File, error) {
-	name = path.Join(s3.bucketPath, name)
-	if name == pathSeparator || pathIsDir(context.Background(), s3, name) {
+	name = s3.resolveName(name)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	isDir := name == pathSeparator || pathIsDir(ctx, s3, name)
+	if isDir {
 		return &httpMinioObject{
 			client: s3.Client,
 			object: nil,
@@ -140,6 +230,8 @@ var (
 	allowedCorsOrigin string
 	letsEncrypt       bool
 	urlBasePath       string
+	redirectHost      string
+	redirectPath     string
 	versionF          = flag.Bool("version", false, "print version")
 )
 
@@ -159,6 +251,8 @@ func init() {
 	flag.StringVar(&spaFile, "spaFile", defaultEnvString("S3WWW_SPA_FILE", ""), "if working with SPA (Single Page Application), use this key the set the absolute path of the file to call whenever a file dosen't exist (S3WWW_SPA_FILE)")
 	flag.StringVar(&allowedCorsOrigin, "allowed-cors-origins", defaultEnvString("S3WWW_ALLOWED_CORS_ORIGINS", ""), "a list of origins a cross-domain request can be executed from (S3WWW_ALLOWED_CORS_ORIGINS)")
 	flag.StringVar(&urlBasePath, "url-base-path", defaultEnvString("S3WWW_URL_BASE_PATH", "/"), "base path to serve files from (S3WWW_URL_BASE_PATH)")
+	flag.StringVar(&redirectHost, "redirect-host", defaultEnvString("S3WWW_REDIRECT_HOST", ""), "host to redirect files to (e.g., https://example.com) (S3WWW_REDIRECT_HOST)")
+	flag.StringVar(&redirectPath, "redirect-path", defaultEnvString("S3WWW_REDIRECT_PATH", "/"), "path prefix to add when redirecting files (e.g., /path/root) (S3WWW_REDIRECT_PATH)")
 }
 
 func defaultEnvString(key string, defaultVal string) string {
@@ -272,7 +366,21 @@ func main() {
 		log.Fatalln(err)
 	}
 
-	mux := http.StripPrefix(urlBasePath, http.FileServer(&S3{client, bucket, bucketPath}))
+	s3fs := &S3{client, bucket, bucketPath}
+
+	var mux http.Handler
+	if redirectHost != "" {
+		mux = &redirectHandler{
+			Handler:      http.FileServer(s3fs),
+			redirectHost: redirectHost,
+			redirectPath: redirectPath,
+			urlBasePath:  urlBasePath,
+			s3fs:         s3fs,
+		}
+	} else {
+		mux = http.FileServer(s3fs)
+	}
+	mux = http.StripPrefix(urlBasePath, mux)
 
 	// Wrap the existing mux with the CORS middleware.
 	opts := cors.Options{
@@ -298,6 +406,9 @@ func main() {
 	muxHandler := cors.New(opts).Handler(mux)
 	m := http.NewServeMux()
 	m.Handle(urlBasePath, muxHandler)
+	if !strings.HasSuffix(urlBasePath, "/") {
+		m.Handle(urlBasePath+"/", muxHandler)
+	}
 
 	switch {
 	case letsEncrypt:

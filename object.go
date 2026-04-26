@@ -17,7 +17,7 @@ package main
 import (
 	"context"
 	"os"
-	"path/filepath"
+	"path"
 	"strings"
 	"time"
 
@@ -54,7 +54,6 @@ func (h *httpMinioObject) Seek(offset int64, whence int) (int64, error) {
 }
 
 func (h *httpMinioObject) Readdir(count int) ([]os.FileInfo, error) {
-	// List 'N' number of objects from a bucket-name with a matching prefix.
 	listObjectsN := func(bucket, prefix string, count int) (objsInfo []minio.ObjectInfo, err error) {
 		i := 1
 		for object := range h.client.ListObjects(context.Background(), bucket, minio.ListObjectsOptions{
@@ -65,7 +64,6 @@ func (h *httpMinioObject) Readdir(count int) ([]os.FileInfo, error) {
 				return nil, object.Err
 			}
 			i++
-			// Verify if we have printed N objects.
 			if i == count {
 				return
 			}
@@ -74,21 +72,26 @@ func (h *httpMinioObject) Readdir(count int) ([]os.FileInfo, error) {
 		return objsInfo, nil
 	}
 
-	// List non-recursively first count entries for prefix 'prefix" prefix.
-	objsInfo, err := listObjectsN(h.bucket, h.prefix+pathSeparator, count)
+	prefix := h.prefix
+	if prefix != "" {
+		prefix = strings.TrimPrefix(prefix, pathSeparator)
+		prefix = prefix + pathSeparator
+	}
+	objsInfo, err := listObjectsN(h.bucket, prefix, count)
 	if err != nil {
 		return nil, os.ErrNotExist
 	}
 	var fileInfos []os.FileInfo
 	for _, objInfo := range objsInfo {
-		objInfo.Key = filepath.Base(objInfo.Key)
-		if strings.HasSuffix(objInfo.Key, pathSeparator) {
+		isDir := strings.HasSuffix(objInfo.Key, pathSeparator)
+		objInfo.Key = path.Base(objInfo.Key)
+		if isDir {
 			fileInfos = append(fileInfos, objectInfo{
 				oi: minio.ObjectInfo{
 					Key:          objInfo.Key,
 					LastModified: objInfo.LastModified,
 				},
-				prefix: strings.TrimSuffix(objInfo.Key, pathSeparator),
+				prefix: objInfo.Key,
 				isDir:  true,
 			})
 		} else {
