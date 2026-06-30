@@ -127,7 +127,10 @@ func pathIsDir(ctx context.Context, s3 *S3, name string) bool {
 			Prefix:  name,
 			MaxKeys: 1,
 		})
-	for range objCh {
+	for object := range objCh {
+		if object.Err != nil {
+			return false
+		}
 		cancel()
 		return true
 	}
